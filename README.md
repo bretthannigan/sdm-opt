@@ -9,7 +9,7 @@ Code for designing sigma delta modulator loop filters with optimal properties. D
 
 ## Getting Started
 
-This repository includes the main function `sdsyn.m`, its dependencies, as well as a large amount of other code developed during the thesis. Much of this is not well documented and was used for testing ideas. However, there are some robust control synthesis functions that may be useful in the `\Control` subfolder.
+This repository includes the main function [`sdsyn.m`](sdsyn/sdsyn.m), its dependencies, as well as a large amount of other code developed during the thesis. Much of this is not well documented and was used for testing ideas. However, there are some robust control synthesis functions that may be useful in the `\Control` subfolder.
 
 The process of designing a loop filter has the following steps:
 
@@ -66,7 +66,7 @@ The result is a modulator stable to about -5 dBFS and with SQNR of 77 dB. Result
 
 <img src="Figures/Example_5-1_SQNR.png" alt="Concept image" width="400"/>
 
-This example and others may be seen in the file `sdsyn_examples.m`.
+This example and others may be seen in the file [`sdsyn_examples.m`](sdsyn/sdsyn_examples.m).
 
 ## More Information
 
