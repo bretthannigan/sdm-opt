@@ -1,0 +1,80 @@
+classdef sdmquantizer
+    properties (Access = public)
+        nLev
+        uMax
+        uMin
+    end
+    properties (Dependent = true)
+        levels
+        delta
+        bits
+    end
+    properties (Access = private)
+    end
+    methods
+        function obj = sdmquantizer(varargin)
+            if nargin==0 % Binary symmetric quantizer.
+                nLev = 2;
+                uMin = -1;
+                uMax = 1;
+            elseif nargin==1 % Odd symmetric quantizer with unit spacing.
+                nLev = varargin{1};
+                uMin = -nLev + 1;
+                uMax = nLev - 1;
+            elseif nargin==2 % Odd symmetric quantizer.
+                nLev = varargin{1};
+                uMin = -(varargin{1} - 1)*varargin{2}/2;
+                uMax = -uMin;
+            elseif nargin==3 % General quantizer.
+                nLev = varargin{1};
+                uMin = varargin{2};
+                uMax = varargin{3};
+            else
+                error('sdmquantizer:nInput', 'Invalid number of input arguments.');
+            end
+            % Error checking.
+            if nLev<1
+                error('sdmquantizer:invalidNLev', 'Number of quantization levels nLev must be a positive integer.');
+            end
+            if uMax < uMin
+                error('sdmquantizer:uMaxuMin', 'Quantizer upper range uMax must not be less than lower range uMin.');
+            end
+            obj.nLev = nLev;
+            obj.uMax = uMax;
+            obj.uMin = uMin;
+        end
+        function obj = set.delta(obj, delta)
+            if mod((obj.uMax - obj.uMin)/delta, 1)>1e-6 % Not "almost an integer".
+                error('sdmquantizer:deltaDividesRange', 'Quantizer range is not evenly divided by quantization spacing delta.');
+            end
+            if delta==0
+                obj.nLev = 1;
+            else
+                obj.nLev = (obj.uMax - obj.uMin)/delta + 1;
+            end
+        end
+        function delta = get.delta(obj)
+            if obj.nLev==1
+                delta = 0;
+            else
+                delta = (obj.uMax - obj.uMin)/(obj.nLev - 1);
+            end
+        end
+        function levels = get.levels(obj)
+            if obj.nLev==1
+                levels = 0;
+            else
+                levels = obj.uMin:obj.delta:obj.uMax;
+            end
+        end
+        function [y, sat] = quantize(obj, u)
+            sat = zeros(size(u));
+            y = mod(u, delta);
+            % Saturation.
+            sat(u > obj.uMax) = 1;
+            y(u > obj.uMax) = obj.uMax;
+            sat(u < obj.uMin) = -1;
+            y(u < obj.uMin) = obj.uMin;
+        end
+    end
+end

@@ -1,0 +1,21 @@
+"lccstub.obj"
+"MOD1_CT_cgxe.obj"
+"m_JO2Fxs0ruK9ktkDoGiL8UC.obj"
+"MOD1_CT_cgxe_registry.obj"
+"HostLib_FFT.obj"
+"HostLib_rtw.obj"
+"MOD1_CT_cgxe.def"
+"C:\Program Files\MATLAB\R2017a\extern\lib\win64\microsoft\libmx.lib"
+"C:\Program Files\MATLAB\R2017a\extern\lib\win64\microsoft\libmex.lib"
+"C:\Program Files\MATLAB\R2017a\extern\lib\win64\microsoft\libmat.lib"
+"C:\Program Files\MATLAB\R2017a\extern\lib\win64\microsoft\libfixedpoint.lib"
+"C:\Program Files\MATLAB\R2017a\extern\lib\win64\microsoft\libut.lib"
+"C:\Program Files\MATLAB\R2017a\extern\lib\win64\microsoft\libmwmathutil.lib"
+"C:\Program Files\MATLAB\R2017a\extern\lib\win64\microsoft\libemlrt.lib"
+"C:\Program Files\MATLAB\R2017a\extern\lib\win64\microsoft\libmwcgxert.lib"
+"C:\Program Files\MATLAB\R2017a\extern\lib\win64\microsoft\libmwslexec_simbridge.lib"
+"C:\Program Files\MATLAB\R2017a\lib\win64\libmwipp.lib"
+"C:\Program Files\MATLAB\R2017a\extern\lib\win64\microsoft\libcovrt.lib"
+-LC:\PROGRA~1\MATLAB\R2017a\extern\lib\win64\microsoft
+C:\PROGRA~1\MATLAB\R2017a\extern\lib\win64\microsoft\libmwblas.lib
+C:\PROGRA~1\MATLAB\R2017a\extern\lib\win64\microsoft\libmwblas.lib

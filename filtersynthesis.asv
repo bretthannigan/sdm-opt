@@ -1,0 +1,375 @@
+function sdsyn(varargin) 
+%SDSYN Sigma Delta Loop Filter Synthesis
+%   Design a sigma delta modulator loop filter according to performance and
+%   stability criteria defined by H-Infinity (GKYP), H-Infinity, H-2, and 
+%   l-1 system norms. Optionally permits an uncertain quantizer gain in the
+%   loop around which stability can be enforced.
+%
+%   Inputs:
+%       H_0: lti loop filter prototype model initial guess which also 
+%           defines the system order and sample time (required).
+%       synOpt: strucure of optimization targets defined with 
+%           DEFINESYNOPT.M (required).
+%       UncertainGain: scalar ureal of multiplicative uncertainty modelling
+%           the quantizer gain OR scalar fixed gain OR 2-by-2 matrix of 
+%           upper LFT transform of the uncertain gain 
+%           (optional, default: 1).
+%       Display: 'on' | 'off' (default) name-value string parameter to
+%           specify if the LMI solver should output progress information
+%           (optional).
+%
+%   Outputs:
+%       S: sensitivity function (NTF), in format specified by input H_0.
+%       H: loop filter, in format specified by input H_0.
+%       CL: closed-loop system with uncertainty block (if present).
+%       normz: achieved system norms.
+%       feas: optimizer strucure output.
+%
+%       See also: DEFINESYNOPT, DTSYN.
+%           [1] T. Iwasaki and S. Hara, “MATHEMATICAL ENGINEERING 
+%               Generalized KYP Lemma : Unified Characterization of 
+%               Frequency Domain Inequalities with Applications to System 
+%               Design,” no. August, 2003.
+%           [2] X. Li, C. Yu, and H. Gao, “Design of delta-sigma modulators 
+%               via generalized Kalman-Yakubovich-Popov lemma,” Automatica, 
+%               vol. 50, no. 10, pp. 2700–2708, 2014.
+%           [3] S. L. Shishkin, “Optimization under non-convex Quadratic 
+%               Matrix Inequality constraints with application to design of
+%               optimal sparse controller,” IFAC-PapersOnLine, vol. 50, no.
+%               1, pp. 10754–10759, 2017.
+%           [4] J. Löfberg, “YALMIP: A Toolbox for Modeling and 
+%               Optimization in MATLAB,” In Proceedings of the CACSD 
+%               Conference. Taipei, Taiwan, 2004.
+%
+%   $Author: BH $    $Date: 2018-08-15 $    $Revision: 0 $
+
+    %% Deal with variable function inputs.
+    p = inputParser;
+    addRequired(p, 'H_0', @(x) isnumeric(x) && isscalar(x));
+    addRequired(p, 'SynOpt', @isstruct);
+    addOptional(p, 'UncertainGain', 1, @(x) isscalar(x) || (isnumeric(x) && all(size(x)==[2 2])));
+    addParameter(p, 'Display', 'off', @(x) ismember(x, {'on', 'off'}));
+    parse(p, varargin{:});
+    n = p.Results.n;
+    synOpt = p.Results.synOpt;
+    Ts = p.Results.Ts;
+    K = p.Results.UncertainGain;
+    isVerbose = strcmp(p.Results.Display, 'on');
+    
+    if ~isproper(H_0)
+        error('sdsyn:improperfilter', 'The initial guess system must be proper.');
+    end
+    
+    %% Take LFT to separate the uncertain quantizer gain.
+    if isa(K, 'ureal')
+        [M, delta] = lftdata(K); % delta is the norm-bounded uncertainty.
+    else
+        M = [0 0; 0 1];
+        delta = 0; % There is no uncertainty.
+    end
+    
+    n = order(H_0);
+    Ts = H_0.Ts;
+    H_0_tf = tf(H_0);
+    b_0 = fliplr(H_0_tf.num{1}');
+    a_0 = fliplr(H_0_tf.den{1}');
+    
+    b = sdpvar(n, 1, 'full'); % Loop filter numerator coefficients.
+    b_op = sdpvar(n, 1, 'full');
+    a = sdpvar(n, 1, 'full'); % Loop filter denominator coefficients.
+    a_op = sdpvar(n, 1, 'full');
+    
+    P = sdpvar(n*ones(1, length(synOpt)), n*ones(1, length(synOpt)), 'symmetric');  
+    Q = sdpvar(n*ones(1, length(synOpt)), n*ones(1, length(synOpt)), 'symmetric');
+    
+    gam = sdpvar(ones(1, length(synOpt)), ones(1, length(synOpt))); % Optimization problem.
+    
+    %% Partition plant.
+    synOpt = sdsyn_buildplant(synOpt, b, a, M);
+    
+    %% Loop through constraints and build LMIs.
+    for iConstraint=1:length(synOpt)
+        
+        %% Load in generalized plant matrices.
+        b_s = synOpt(iConstraint).C'; % Sensitivity function numerator coefficients (equivalent to vector c from [2]).
+        b_s_op = replace(b_s, [b a], [b_op a_op]);
+        a_s = -synOpt(iConstraint).A(end, :)'; % Sensitivity function denominator coefficients (equivalent to vector d from [2]).
+        a_s_op = replace(a_s, [b a], [b_op a_op]);
+        B = synOpt(iConstraint).B; % Closed-loop input-state matrix.
+        D = synOpt(iConstraint).D; % Closed-loop feedthrough matrix.
+        
+        if synOpt(iConstraint).constraint~=-1
+            gam{iConstraint} = synOpt(iConstraint).constraint.^2; % Sub-optimal (feasibility) problem.
+        end
+        
+        switch synOpt(iConstraint).norm
+            case 1
+                %% Form l-1/(*) output feedback LMI.
+                % TODO
+            case 2
+                %% Form H-2 output feedback LMI.
+                % TODO
+            case Inf
+                %% Form H-Inf output feedback LMI.
+                partialConstraint = sdsyn_gkyp_lmi(gam{iConstraint}, P{iConstraint}, P_op{iConstraint}, Q{iConstraint}, Q_op{iConstraint}, synOpt(iConstraint).ffi, Ts);
+                
+        end
+        ymConstraint = [ymConstraint, partialConstraint]; %#ok<AGROW>
+        
+    end
+    ymObjective = sum([gam{:}]); 
+    ymOptions = sdpsettings('verbose', true, 'solver', ymSolver, 'lmilab.reltol', 1e-6, 'lmilab.maxiter', 500, 'lmilab.feasradius', 1e9, 'lmilab.L', 100); % Settings from [2].
+    [a_s_0, b_s_0, P_0, Q_0, ~] = sdsyn_initialguess();
+    iterProgress = sdsyn_nlinhandler(500, 0, 1e-4);
+    
+    function ymConstraint = sdsyn_gkyp_lmi(gam, P, Q, ffi, Ts)
+    %FILTERSYNTHESIS_GKYP_LMI H-Infinity Linear Matrix Inequality Using the
+    % Generalized KYP Lemma
+    %   Establishes the linear matrix inequality for the H-Inf norm
+    %   optimization or feasibility program using the Generalized 
+    %   Kalman-Yakubovich-Popov Lemma to restrict the LMI to a finite 
+    %   frequency interval. Matrix variables that are shared among LMIs are
+    %   passed globally.
+    %
+    %   Input:
+    %       gam: the optimized variable (constaint if sub-optimal
+    %       feasibility test is to be done).
+    %       ffi: a 2-element vector defining the finite frequency interval 
+    %           (for H-Inf GKYP condition), otherwise [0 2*pi];
+    %   Outputs:
+    %       ymConstraint: a YALMIP constraint object containing the LMIs.
+    %
+    %   See also: FILTERSYNTHESIS
+    %       [1] T. Iwasaki and S. Hara, “MATHEMATICAL ENGINEERING 
+    %           Generalized KYP Lemma : Unified Characterization of 
+    %           Frequency Domain Inequalities with Applications to System 
+    %           Design,” no. August, 2003.
+    %
+    %   $Author: BH $    $Date: 2018-08-15 $    $Revision: 0 $
+        
+        %% Define local H-Inf optimization variables.
+        % These are local to the H-Inf LMIs and not shared among 
+        % constraints.
+        
+        % Frequency range
+        wc = (ffi(2) + ffi(1))/2;
+        if Ts==0
+            Phi = [0 1; 1 0];
+            Psi = [-1 1i*wc; -1i*wc -ffi(1)*ffi(2)];
+        else
+            Phi = [1 0; 0 -1];
+            w0 = (ffi(2) - ffi(1))/2;
+            Psi = [0 exp(1i*wc); exp(-1i*wc) -2*cos(w0)];
+        end
+        
+        A_c = [zeros(n-1, 1) eye(n-1); zeros(1, n)];
+        outerFactor = [A_c B; eye(n) zeros(n, 1)];
+        Theta = @(Q, P) kron(Phi, P) + kron(Psi, Q);
+        
+        if all(ffi==[0 2*pi]) || all(ffi==[0 Inf]) % All frequencies.
+            Q = zeros(n);
+        end
+        
+        ymLmi{1} = -[outerFactor'*Theta(Q, P)*outerFactor - [zeros(n) (a_s + a_s_op); (a_s + a_s_op)' 1]...
+            [b_s; D];...
+            b_s'...
+            D' ...
+            -gam] + [a_s*a_s_op' + a_s_op*a_s' + a_s_op*a_s_op' zeros(n, 2); zeros(2, n) zeros(2, 2)];
+        ymConstraint = [ymLmi{1}>=0, Q>=0, P>=0];
+    end
+
+    function [a_s_0, b_s_0, P_0, Q_0, ymConstraintIG] = sdsyn_initialguess()
+    %SDSYN_INITIALGUESS Generate Initial Guess for LMI Sovler
+    %   Uses an initial guess to produce the auxiliary variables for the
+    %   next steps.
+    %
+    %   Outputs:
+    %       b_s_0: vector of sensitivity function numerator coefficients
+    %           that are feasible for the initial guess LMI problem.
+    %       a_s_0: vector of sensitivity function denominator coefficients
+    %           that are feasible for the initial guess LMI problem.
+    %       P_0: cell array of P matrices that are feasible for the initial
+    %           guess LMI problem.
+    %       Q_0: cell array of Q matrices that are feasible for the initial
+    %           guess LMI problem.
+    %       ymConstraintIG: a YALMIP constraint object containing the 
+    %           initial guess LMIs.
+    %
+    %   See also: SDSYN
+    %       [1] X. Li, C. Yu, and H. Gao, “Design of delta-sigma modulators 
+    %               via generalized Kalman-Yakubovich-Popov lemma,” 
+    %               Automatica, vol. 50, no. 10, pp. 2700–2708, 2014.
+    %
+    %   $Author: BH $    $Date: 2018-08-16 $    $Revision: 0 $
+    
+        ymConstraintIG = replace(ymConstraint, [a b a_op b_op], [zeros(size(a)) zeros(size(b)) a_0 b_0]);
+        for iP_op=1:length(P_op)
+            ymConstraintIG = replace(ymConstraintIG, P_op{iP_op}, zeros(size(P_op{iP_op})));
+        end
+        for iQ_op=1:length(Q_op)
+            ymConstraintIG = replace(ymConstraintIG, Q_op{iQ_op}, zeros(size(Q_op{iQ_op})));
+        end
+        % OPTIMIZE
+        ymDiagnostics = sdsyn_blinhandler(ymConstraintIG, ymObjective, ymOptions);
+        if ymDiagnostics.problem==1
+            error('sdsyn_initialguess:infeasIG', 'Initial guess is infeasible.');
+        elseif ymDiagnostics.problem~=0
+            warning(ymDiagnostics.info);
+        end
+        P_0 = cellfun(@value, P, 'UniformOutput', false);
+        Q_0 = cellfun(@value, Q, 'UniformOutput', false);
+        a_s_0 = value(a_s);
+        b_s_0 = value(b_s);
+    end
+
+    function iterProgress = sdsyn_nlinhandler(maxIter, kappa, epsilon)
+    %SDSYN_NLINHANDLER Handler for SDP Problems with Non-Convex QMI
+    % Constraints
+    %   Handler for an iterative method that allows solving of quadratic 
+    %   matrix inequality constraints with linear objectives. Non-convex
+    %   constrants are replaced by a sum of 2 terms, the first of which is
+    %   the linearized/convexified operating point and the second of which
+    %   is an incremental change (see [1] for background).
+    %
+    %   Inputs:
+    %       maxIter: maximum number of interations.
+    %       kappa: tuning parameter for termination.
+    %       epsilon: tolerance for change in output.
+    %
+    %   Output:
+    %       iterProgress: structure containing iteration by interation
+    %           variables and objective values.
+    %
+    %   See also: SDSYN, SDSYN_BLINHANDLER
+    %       [1] S. L. Shishkin, “Optimization under non-convex Quadratic 
+    %           Matrix Inequality constraints with application to design of
+    %           optimal sparse controller,” IFAC-PapersOnLine, vol. 50, no.
+    %           1, pp. 10754–10759, 2017.
+    %       [2] J. Löfberg, “YALMIP: A Toolbox for Modeling and 
+    %           Optimization in MATLAB,” In Proceedings of the CACSD 
+    %           Conference. Taipei, Taiwan, 2004.
+        ymCellValue = @(x) cellfun(@value, x, 'UniformOutput', false);
+        iterProgress = struct('a_s', a_s_0, 'b_s', b_s_0, 'gam', num2cell(ones(size(gam))*1e6));
+        k = 1;
+        iterChange = 1;
+        while k<maxIter && any(iterChange>=epsilon)
+            % Convexification of problem (Step (2) from [1]).
+            ymConstraintNL = replace(ymConstraint, a_s_op, iterProgress(k).a_s);
+            % Optimization (Equations (10)-(12) from [1]).
+            ymDiagnostics = sdsyn_blinhandler(ymConstraintNL, ymObjective + kappa*norm(a_s)^2, ymOptions);
+            if ymDiagnostics.problem==1
+                error('sdsyn_nlinhandler:infeas', ['Iteration ' num2str(k) ' is infeasible.']);
+            elseif ymDiagnostics.problem~=0
+                warning(ymDiagnostics.info);
+            end
+            k = k + 1; % Update k.
+            % Assign solution for next convexification point (Equation (13)
+            % from [1])
+            iterProgress(k).a_s = iterProgress(k-1).a_s + value(a_s);
+            iterProgress(k).b_s = iterProgress(k-1).b_s + value(b_s);
+            iterProgress(k).gam = cellfun(@(x) x + ymCellValue(gam), iterProgress(k-1).gam);
+            iterChange = norm(iterProgress(k).a_s - iterProgress(k-1).a_s);
+        end
+    end
+
+    function diag = sdsyn_blinhandler(constraint, objective, options)
+    %SDSYN_BLINHANDLER Bilinear Optimization Handler using Bisection Method
+    %   Handles calls to YALMIP optimize() to allow the bisection method to
+    %   be used with different solvers. Bisection method is required for
+    %   the line search over alpha if an l-1 norm constraint is in effect.
+    %
+    %   Inputs:
+    %       constraint: YALMIP constraint object.
+    %       objective: YALMIP objective function.
+    %       options: YALMIP options structure defined with sdpsettings().
+    %
+    %   Outputs:
+    %       diag: YALMIP diagnostics structure.
+    %
+    %   See also: SDSYN, SDSYN_BLINHANDLER
+    %       [1] J. Löfberg, “YALMIP: A Toolbox for Modeling and 
+    %           Optimization in MATLAB,” In Proceedings of the CACSD 
+    %           Conference. Taipei, Taiwan, 2004.
+    %       
+    %   $Author: BH $    $Date: 2018-08-16 $    $Revision: 0 $
+    
+        if strcmpi(options.solver, 'lmilab') % Must use YALMIP optimize with variable replacement (slower).
+            diag = optimize(constraint, objective, options);
+        else % Supports YALMIP optimizer pre-compiled object (much faster).
+        end
+    end
+
+end
+
+function synOpt = sdsyn_buildplant(synOpt, b, a, K)
+%PARTITIONPLANT Build Controllable Canonical Form Generalized Plant
+%   Generates a state space model of a closed-loop plant with uncertain 
+%   quantizer gain. Inputs to the plant are the reference input and
+%   norm-bounded uncertainty channel. Outputs of the plant are the
+%   feedback error (sensitivity function) and uncertainty output.
+%   
+%   Inputs:
+%       synOpt: optimization target structure generated with
+%           DEFINESYNOPT.M (required).
+%       b: vector of loop filter numerator coefficients, ordered from
+%           lowest to highest power of z/s.
+%       a: vector of loop filter denominator coefficients, ordered from
+%           lowest to highest power of z/s.
+%       K: 2-by-2 matrix of certain gains obtained by lower LFT of the
+%           uncertain quantizer gain.
+%       
+%   Outputs:
+%       synOpt: optimization target structure augmented with A, B, C, D
+%           matrices for each optimization target.
+%
+%   $Author: BH $    $Date: 2018-08-15 $    $Revision: 0 $
+%
+% REVISION 0:
+%   2018-08-15 by BH: forked from PARTITIONPLANT in file dtsyn_func.m with
+%       major modifications.
+
+    %% Plant partitioning:
+    %       In:       x          w      r
+    %                 |          |      |
+    % Out:            V          V      V
+    %          .--------------------------.
+    % dx/dt <- | A-K_22*B*C | -K_21*B | B | n
+    %          |------------|---------|---|
+    %     z <- |   K_12*C   |  K_11   | 0 | 1
+    %          |------------|---------|---|
+    %     e <- |   -K_22*C  |  -K_21  | 1 | 1
+    %          '--------------------------'
+    %      Size:      n          1      1
+    
+    n = length(a);
+    
+    for iStruct=1:length(synOpt)
+        synOpt(iStruct).A = [zeros(n-1, 1) eye(n-1); -b - K(2,2)*a]; %A is global and redundant, but kept in structure array for completeness.
+        if synOpt(iStruct).inputChannel==1
+            synOpt(iStruct).B = -K(2,1)*[zeros(n-1, 1); 1];
+            if synOpt(iStruct).outputChannel==1
+                synOpt(iStruct).C = K(1,2)*a;
+                synOpt(iStruct).D = K(1,1);
+            elseif synOpt(iStruct).outputChannel==2
+                synOpt(iStruct).C = -K(2,2)*a;
+                synOpt(iStruct).D = -K(2,1);
+            else
+                error('filtersynthesis_buildplant:invalidOutputChannel', ['Channel ' num2str(synOpt(iStruct).outputChannel) ' is invalid (must be 1 or 2).']);
+            end
+        elseif synOpt(iStruct).inputChannel==2
+            synOpt(iStruct).B = [zeros(n-1, 1); 1];
+            if synOpt(iStruct).outputChannel==1
+                synOpt(iStruct).C = K(1,2)*a;
+                synOpt(iStruct).D = 0;
+            elseif synOpt(iStruct).outputChannel==2
+                synOpt(iStruct).C = -K(2,2)*a;
+                synOpt(iStruct).D = 1;
+            else
+                error('filtersynthesis_buildplant:invalidOutputChannel', ['Channel ' num2str(synOpt(iStruct).outputChannel) ' is invalid (must be 1 or 2).']);
+            end
+        else
+            error('filtersynthesis_buildplant:invalidInputChannel', ['Channel ' num2str(synOpt(iStruct).inputChannel) ' is invalid (must be 1 or 2).']);
+        end
+    end
+    
+end
