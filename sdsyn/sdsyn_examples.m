@@ -1,35 +1,56 @@
-%SDSYN_EXAMPLES Script to generate similar sigma delta filters to the
-%thesis and paper.
-%
-%   See also:
-%       [1] B. C. Hannigan, "On the Design of Stable, High Performance 
-%           Sigma Delta Modulators", MASc. thesis, University of British 
-%           Columbia, 2018.
-%       [2] B. C. Hannigan, C. L. Petersen, A. M. Mallinson, and G. A. 
-%           Dumont, "An Optimization Framework for the Design of Noise 
-%           Shaping Loop Filters with Improved Stability Properties", 
-%           Circuits, Systems, and Signal Processing, vol. 39, no. 12, pp. 
-%           6276–6298, 2020.
+%% Parameters.
+order = 5;
+osr = 32; % Oversampling ratio.
+fs = 200; % Signal Nyquist frequeuncy (Hz).
+DESIGN_TYPE = 1;
+INITIAL_GUESS_TYPE = 2; % Choose the method used to generate an initial condition.
 
-%% H-Inf Stability Criterion 
-% Reproduces a design similar to that from Section 5.1 of [1] and Section
-% 4.1 of [2].
+%% Define the optimzation goals.
+switch DESIGN_TYPE
+    case 1 % H-infinity design like in Thesis Section 5.1.
+        termParam = struct('maxIter', 500, 'kappa', 0.01, 'epsilon', 1e-4);
+        lee_criterion = 1.5; % Maximum NTF out-of-band gain.
+        synOpt = defineSynOpt(-1, Inf, [0 pi/osr], 2, 2,... % Performance target.
+            lee_criterion, Inf, [0 pi], 2, 2); % H-inf stability criterion (Lee's rule).
+        k = 1; % Quantizer gain.
+    case 2 % Root locus design like in Thesis Section 5.2.
+        termParam = struct('maxIter', 2000, 'kappa', 0.005, 'epsilon', 1e-4);
+        synOpt = defineSynOpt(-1, Inf, [0 pi/osr], 2, 2,... % Performance target.
+            1, Inf, [0 pi], 1, 1); % Root locus stability criterion.
+        k = ureal('k', 1, 'Range', [0.1 2]); % The upper range usually doesn't matter as long as it well above 1.
+    case 3 % H-2 design like in Thesis Section 5.3.
+        termParam = struct('maxIter', 150, 'kappa', 0, 'epsilon', 1e-6);
+        h2_criterion = sqrt(1.79);
+        synOpt = defineSynOpt(-1, Inf, [0 pi/osr], 2, 2,... % Performance target.
+            h2_criterion, 2, [0 pi], 2, 2); % H-2 stability criterion.
+        k = 1; % Quantizer gain.
+    case 4 % l-1/star norm design like in Thesis Section 5.4.
+        termParam = struct('maxIter', 100, 'kappa', 0.001, 'epsilon', 1e-6);
+        star_criterion = 4;
+        synOpt = defineSynOpt(-1, Inf, [0 pi/osr], 2, 2,... % Performance target.
+            star_criterion, 1, [0 pi], 2, 2); % l-1 stability criterion.
+        k = 1; % Quantizer gain.
+end
 
-synOpt_51 = defineSynOpt(-1, Inf, [0 pi/32], 2, 2, 1.5, Inf, [0 pi], 2, 2);
-S0 = synthesizeNTF(5, 32, 1, 0.5, 0); % Start with an initial guess NTF from the Delta-Sigma Toolbox.
-H0 = zpk(minreal((1 - S0)/S0)); % Convert the NTF to loop filter form using Equation (1.3) from [1].
-H0.p{1} = H0.p{1}*0.995; % Slightly scale the poles so that the loop filter is strictly stable.
-[H, S, CL, normz, diagn, iterProgress] = sdsyn(H0, synOpt_51, 'display', 'on');
-[snr, amp] = predictSNR(S, 32);
-figure; 
-plot(amp, snr, '.-k')
-legend('location', 'NorthWest')
-title('SQNR vs. Amplitude for H-Infinity Design')
-xlabel('Amplitude (dB)')
-ylabel('SQNR (dB)')
+%% Obtain initial condition.
+switch INITIAL_GUESS_TYPE
+    case 1
+        % Let's use a simple initial condition transfer function:
+        h_0 = zpk(zeros(order - 1, 1), zeros(order, 1), 1, 1/fs);
+    case 2
+        % Alternately, can use an initial guess from Schreier's DSToolbox, 
+        % with a couple small changes.
+        S_0 = synthesizeNTF(order, osr, 1);
+        S_0.z{1} = 0.98*S_0.z{1}; % Slightly contract the zeros as they are located on the unit circle by default.
+        h_0 = minreal((1 - S_0)/S_0); % Must be provided as a loop filter rather than NTF.
+    case 3
+        % The third option is to use a convex relaxation to generate an
+        % initial transfer function, where the h_0 input to SDSYN is a
+        % numeric scalar specifying the desired system order.
+        [h_0, ~, ~, ~, ~] = sdsyn(5, synOpt, k, 'Display', 'off', 'TermParam', termParam, 'InitialGuess', true);
+end
 
-%% Root Locus Stability Criterion
-% Reproduces a design similar to that from Section 5.2 of [1] and 4.2 of
-% [2].
-
-
+%% Run the optimization.
+tic
+[H, S, CL, normz, diagn, iterProgress] = sdsyn(h_0, synOpt, k, 'Display', 'on', 'TermParam', termParam);
+toc

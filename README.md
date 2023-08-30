@@ -1,5 +1,5 @@
 # sdm-opt
-Code for designing sigma delta modulator loop filters with optimal properties.
+Code for designing sigma delta modulator loop filters with optimal properties. Developed during my masters thesis research at the [Digital Health Innovation Lab](https://bcchr.ca/dhil).
 
 ## Requirements
 - MATLAB (tested in versions 2018a-2022a)
